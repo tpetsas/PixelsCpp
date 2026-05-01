@@ -3,6 +3,7 @@
 #include "App/DieConnection.h"
 
 #include <shellapi.h>
+#include <sddl.h>
 #include <sstream>
 #include <algorithm>
 
@@ -254,6 +255,15 @@ void RollServer::serverThread()
 {
     while (running_)
     {
+        // Build a security descriptor that grants full access to Everyone
+        // so that non-elevated BG3 can connect even when PixelsTray runs elevated.
+        SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, FALSE };
+        PSECURITY_DESCRIPTOR pSD = nullptr;
+        const wchar_t* sddl = L"D:(A;;GA;;;WD)"; // Grant All to Everyone
+        bool hasSA = ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl, SDDL_REVISION_1, &pSD, nullptr);
+        if (hasSA) sa.lpSecurityDescriptor = pSD;
+
         // Create the named pipe instance
         HANDLE pipe = CreateNamedPipeW(
             kPipeName,
@@ -263,8 +273,9 @@ void RollServer::serverThread()
             4096,       // Out buffer
             4096,       // In buffer
             0,          // Default timeout
-            nullptr     // Default security
+            hasSA ? &sa : nullptr
         );
+        if (pSD) LocalFree(pSD);
 
         if (pipe == INVALID_HANDLE_VALUE)
         {
