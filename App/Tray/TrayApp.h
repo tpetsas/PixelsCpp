@@ -34,6 +34,7 @@ public:
 
     bool initialize(HINSTANCE instanceHandle, const std::wstring& configPath);
     int runMessageLoop();
+    void watchSpawner(DWORD pid);
 
 private:
     static constexpr UINT kTrayCallbackMsg = WM_APP + 1;

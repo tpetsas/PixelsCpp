@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <thread>
 #include <vector>
 
 #include <commdlg.h>
@@ -317,6 +318,20 @@ int TrayApp::runMessageLoop()
         DispatchMessageW(&msg);
     }
     return static_cast<int>(msg.wParam);
+}
+
+void TrayApp::watchSpawner(DWORD pid)
+{
+    HANDLE hProc = OpenProcess(SYNCHRONIZE, FALSE, pid);
+    if (!hProc) return;
+
+    std::thread([this, hProc]
+    {
+        WaitForSingleObject(hProc, INFINITE);
+        CloseHandle(hProc);
+        Sleep(5000);
+        PostMessageW(windowHandle_, WM_CLOSE, 0, 0);
+    }).detach();
 }
 
 LRESULT CALLBACK TrayApp::windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
