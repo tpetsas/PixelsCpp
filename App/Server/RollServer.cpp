@@ -51,130 +51,8 @@ namespace
         catch (...) { return defaultVal; }
     }
 
-    // Find BG3 window
-    HWND g_bg3Window = nullptr;
-
-    BOOL CALLBACK FindBG3WindowCallback(HWND hwnd, LPARAM /*lParam*/)
-    {
-        wchar_t title[256];
-        GetWindowTextW(hwnd, title, 256);
-        std::wstring titleStr(title);
-        if (titleStr.find(L"Baldur's Gate 3") != std::wstring::npos)
-        {
-            g_bg3Window = hwnd;
-            return FALSE;
-        }
-        return TRUE;
-    }
-
-    HWND FindBG3Window()
-    {
-        g_bg3Window = nullptr;
-        EnumWindows(FindBG3WindowCallback, 0);
-        return g_bg3Window;
-    }
-#if 0
-    void ClickWindowCenter(HWND hwnd)
-    {
-        if (!hwnd) return;
-
-        RECT rect;
-        if (!GetWindowRect(hwnd, &rect)) return;
-
-        int clickX = rect.left + (rect.right - rect.left) / 2;
-        int clickY = rect.top + (rect.bottom - rect.top) / 2;
-
-        // Convert pixel coords to absolute (0-65535) for MOUSEEVENTF_ABSOLUTE
-        int screenW = GetSystemMetrics(SM_CXSCREEN);
-        int screenH = GetSystemMetrics(SM_CYSCREEN);
-        LONG absX = static_cast<LONG>((clickX * 65536) / screenW);
-        LONG absY = static_cast<LONG>((clickY * 65536) / screenH);
-
-        // Ensure BG3 has focus
-        SetForegroundWindow(hwnd);
-        Sleep(100);
-
-        // Move cursor and click
-        INPUT inputs[3] = {};
-        inputs[0].type = INPUT_MOUSE;
-        inputs[0].mi.dx = absX;
-        inputs[0].mi.dy = absY;
-        inputs[0].mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE;
-
-        inputs[1].type = INPUT_MOUSE;
-        inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-
-        inputs[2].type = INPUT_MOUSE;
-        inputs[2].mi.dwFlags = MOUSEEVENTF_LEFTUP;
-
-        SendInput(3, inputs, sizeof(INPUT));
-    }
-#endif
 }
 
-bool GetClientPointOnScreen(HWND hwnd, float normX, float normY, POINT& outPt)
-{
-    if (!hwnd || !IsWindow(hwnd)) return false;
-
-    RECT rc{};
-    if (!GetClientRect(hwnd, &rc)) return false;
-
-    int clientW = rc.right - rc.left;
-    int clientH = rc.bottom - rc.top;
-
-    POINT pt{};
-    pt.x = static_cast<LONG>(std::lround(clientW * normX));
-    pt.y = static_cast<LONG>(std::lround(clientH * normY));
-
-    if (!ClientToScreen(hwnd, &pt)) return false;
-
-    outPt = pt;
-    return true;
-}
-
-// Move cursor using SendInput so it generates raw-input events.
-// BG3 uses raw input to detect mouse activity and switch from
-// controller mode to mouse mode; SetCursorPos alone won't do it.
-void MoveMouseAbsolute(int screenX, int screenY)
-{
-    int sw = GetSystemMetrics(SM_CXSCREEN);
-    int sh = GetSystemMetrics(SM_CYSCREEN);
-    if (sw <= 0 || sh <= 0) return;
-
-    INPUT input = {};
-    input.type = INPUT_MOUSE;
-    input.mi.dx = static_cast<LONG>(std::lround(screenX * 65535.0 / (sw - 1)));
-    input.mi.dy = static_cast<LONG>(std::lround(screenY * 65535.0 / (sh - 1)));
-    input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
-    SendInput(1, &input, sizeof(INPUT));
-}
-
-void LeftClickScreenPoint(POINT pt)
-{
-    MoveMouseAbsolute(pt.x, pt.y);
-
-    INPUT inputs[2] = {};
-    inputs[0].type = INPUT_MOUSE;
-    inputs[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-
-    inputs[1].type = INPUT_MOUSE;
-    inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
-
-    SendInput(2, inputs, sizeof(INPUT));
-}
-
-void ClickClientNormalized(HWND hwnd, float normX, float normY)
-{
-    if (!hwnd) return;
-
-    POINT pt{};
-    if (!GetClientPointOnScreen(hwnd, normX, normY, pt)) return;
-
-    SetForegroundWindow(hwnd);
-    Sleep(75);
-
-    LeftClickScreenPoint(pt);
-}
 
 RollServer::RollServer(Logger logger)
     : logger_(std::move(logger))
@@ -381,12 +259,6 @@ void RollServer::handleClient(HANDLE pipe)
 std::string RollServer::processRequest(const std::string& json)
 {
     const std::string mode = jsonString(json, "mode");
-
-    if (mode == "ready")
-    {
-        handleReadyCommand();
-        return "{\"mode\": \"ready\", \"status\": \"ok\"}";
-    }
 
     if (mode == "normal" || mode == "advantage" || mode == "disadvantage")
     {
@@ -941,45 +813,6 @@ void RollServer::showRollRegisteredPopup()
     }).detach();
 }
 
-void RollServer::handleReadyCommand()
-{
-    log("[RollServer] Ready command received, looking for BG3 window...");
-
-    HWND bg3Window = FindBG3Window();
-    if (!bg3Window)
-    {
-        log("[RollServer] BG3 window not found");
-        return;
-    }
-
-    HWND foreground = GetForegroundWindow();
-    if (foreground != bg3Window)
-    {
-        log("[RollServer] BG3 not in foreground, skipping click");
-        return;
-    }
-
-    RECT rect;
-    GetWindowRect(bg3Window, &rect);
-    int cx = rect.left + (rect.right - rect.left) / 2;
-    int cy = rect.top + (rect.bottom - rect.top) / 2;
-    log("[RollServer] Clicking BG3 window center at (" + std::to_string(cx) + ", " + std::to_string(cy) +
-        ") window=(" + std::to_string(rect.left) + "," + std::to_string(rect.top) + ")-(" +
-        std::to_string(rect.right) + "," + std::to_string(rect.bottom) + ")");
-    // When using a controller (e.g. DualSense), BG3 is in controller mode
-    // and ignores mouse clicks until it detects real mouse activity via raw
-    // input. Move the cursor over the dice using SendInput (which generates
-    // raw-input events) to trigger the controller->mouse mode switch AND
-    // register the hover, then click once.
-    POINT pt{};
-    if (!GetClientPointOnScreen(bg3Window, 0.50f, 0.43f, pt)) return;
-
-    SetForegroundWindow(bg3Window);
-    Sleep(100);
-    MoveMouseAbsolute(pt.x, pt.y);   // raw-input move → triggers mode switch
-    Sleep(1000);                       // let BG3 switch to mouse mode + hover
-    LeftClickScreenPoint(pt);          // single click on the dice
-}
 
 void RollServer::log(const std::string& message) const
 {

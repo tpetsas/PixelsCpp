@@ -10,7 +10,6 @@
 #include <vector>
 
 #include <windows.h>
-#include <cmath>
 
 #include "App/Runtime/RuntimeModels.h"
 
@@ -45,7 +44,6 @@ private:
     std::string processRequest(const std::string& json);
     std::string waitForRolls(const std::string& mode, uint32_t generation);
     void showRollRegisteredPopup();
-    void handleReadyCommand();
 
     Logger logger_;
     DiceSnapshotProvider snapshotProvider_;
