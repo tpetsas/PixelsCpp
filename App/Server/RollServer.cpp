@@ -260,22 +260,21 @@ void RollServer::handleClient(HANDLE pipe)
 
 std::string RollServer::processRequest(const std::string& json)
 {
-    const std::string mode = jsonString(json, "mode");
+    const std::string action = jsonString(json, "action");
+    const std::string mode   = jsonString(json, "mode");
+
+    // Second message: mod has already set g_smartDiceResult and now asks us to click.
+    if (action == "click")
+    {
+        if (clickCallback_)
+            clickCallback_(mode);
+        return "{\"ok\": true}";
+    }
 
     if (mode == "normal" || mode == "advantage" || mode == "disadvantage")
     {
         const uint32_t generation = static_cast<uint32_t>(jsonInt(json, "generation"));
-        const std::string response = waitForRolls(mode, generation);
-
-        // Click the dice button from the tray app process after dice are collected.
-        // Doing it here (external process) avoids the windowed/borderless coordinate
-        // issues that caused the mod-side click to miss in non-fullscreen modes.
-        if (response.find("\"error\"") == std::string::npos && clickCallback_)
-        {
-            clickCallback_(mode);
-        }
-
-        return response;
+        return waitForRolls(mode, generation);
     }
 
     return "{\"error\": \"unknown mode\"}";
