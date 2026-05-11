@@ -22,6 +22,9 @@ public:
     // Suspends watchdog reconnect attempts so the BLE scanner has a clear
     // channel to receive advertisements from the disconnected die.
     using DiceReconnectSuspender = std::function<void(std::chrono::seconds)>;
+    // Called after dice results are collected (no-controller path).
+    // The tray app performs the click so it works in all window modes.
+    using ClickCallback = std::function<void(const std::string& mode)>;
 
     explicit RollServer(Logger logger = nullptr);
     ~RollServer();
@@ -30,7 +33,8 @@ public:
     RollServer& operator=(const RollServer&) = delete;
 
     void start(DiceSnapshotProvider snapshotProvider,
-               DiceReconnectSuspender reconnectSuspender = nullptr);
+               DiceReconnectSuspender reconnectSuspender = nullptr,
+               ClickCallback clickCallback = nullptr);
     void stop();
 
     // Called by DieConnection::markRollResult via the RollObserver chain
@@ -48,6 +52,7 @@ private:
     Logger logger_;
     DiceSnapshotProvider snapshotProvider_;
     DiceReconnectSuspender reconnectSuspender_;
+    ClickCallback clickCallback_;
 
     std::thread serverThread_;
     std::atomic<bool> running_ = false;

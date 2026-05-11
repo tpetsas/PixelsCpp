@@ -65,12 +65,14 @@ RollServer::~RollServer()
 }
 
 void RollServer::start(DiceSnapshotProvider snapshotProvider,
-                       DiceReconnectSuspender reconnectSuspender)
+                       DiceReconnectSuspender reconnectSuspender,
+                       ClickCallback clickCallback)
 {
     if (running_) return;
 
     snapshotProvider_ = std::move(snapshotProvider);
     reconnectSuspender_ = std::move(reconnectSuspender);
+    clickCallback_ = std::move(clickCallback);
     running_ = true;
     stopEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 
@@ -263,7 +265,17 @@ std::string RollServer::processRequest(const std::string& json)
     if (mode == "normal" || mode == "advantage" || mode == "disadvantage")
     {
         const uint32_t generation = static_cast<uint32_t>(jsonInt(json, "generation"));
-        return waitForRolls(mode, generation);
+        const std::string response = waitForRolls(mode, generation);
+
+        // Click the dice button from the tray app process after dice are collected.
+        // Doing it here (external process) avoids the windowed/borderless coordinate
+        // issues that caused the mod-side click to miss in non-fullscreen modes.
+        if (response.find("\"error\"") == std::string::npos && clickCallback_)
+        {
+            clickCallback_(mode);
+        }
+
+        return response;
     }
 
     return "{\"error\": \"unknown mode\"}";

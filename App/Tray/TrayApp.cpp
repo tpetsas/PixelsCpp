@@ -2,6 +2,7 @@
 #include "App/Tray/TrayApp.h"
 
 #include <algorithm>
+#include <cmath>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -145,6 +146,69 @@ namespace
         return std::wstring(s.begin(), s.end());
     }
 
+    // ── BG3 dice-button click helpers (mouse & keyboard fallback, no controller) ──
+    //
+    // Running from the tray app (external process) fixes the coordinate mapping issue
+    // that caused clicks to land outside the window in windowed / borderless mode.
+
+    struct FindBG3Ctx { HWND best; LONG bestArea; };
+
+    BOOL CALLBACK FindBG3EnumCb(HWND hwnd, LPARAM lParam)
+    {
+        char cls[64] = {};
+        GetClassNameA(hwnd, cls, sizeof(cls));
+        if (strcmp(cls, "SDL_app") != 0) return TRUE;
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
+        LONG area = (rc.right - rc.left) * (rc.bottom - rc.top);
+        auto* ctx = reinterpret_cast<FindBG3Ctx*>(lParam);
+        if (area > ctx->bestArea) { ctx->bestArea = area; ctx->best = hwnd; }
+        return TRUE;
+    }
+
+    HWND findBG3Window()
+    {
+        FindBG3Ctx ctx{ nullptr, 0 };
+        EnumWindows(FindBG3EnumCb, reinterpret_cast<LPARAM>(&ctx));
+        if (ctx.best) return ctx.best;
+        return FindWindowA(nullptr, "Baldur's Gate 3");
+    }
+
+    void clickBG3DiceButton(const std::string& mode, float normX, float normY)
+    {
+        HWND hwnd = findBG3Window();
+        if (!hwnd) return;
+
+        const bool multiDie = (mode == "advantage" || mode == "disadvantage");
+        const float cx = multiDie ? normX - 0.03f : normX;
+
+        RECT rc{};
+        if (!GetClientRect(hwnd, &rc)) return;
+        POINT pt{};
+        pt.x = static_cast<LONG>(std::lround((rc.right - rc.left) * cx));
+        pt.y = static_cast<LONG>(std::lround((rc.bottom - rc.top) * normY));
+        if (!ClientToScreen(hwnd, &pt)) return;
+
+        int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        if (vw <= 0 || vh <= 0) return;
+
+        INPUT move{};
+        move.type = INPUT_MOUSE;
+        move.mi.dx = static_cast<LONG>(std::lround((pt.x - vx) * 65535.0 / (vw - 1)));
+        move.mi.dy = static_cast<LONG>(std::lround((pt.y - vy) * 65535.0 / (vh - 1)));
+        move.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+        SendInput(1, &move, sizeof(INPUT));
+        Sleep(100);
+
+        INPUT clicks[2] = {};
+        clicks[0].type = INPUT_MOUSE; clicks[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+        clicks[1].type = INPUT_MOUSE; clicks[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+        SendInput(2, clicks, sizeof(INPUT));
+    }
+
     std::wstring statusToWide(Systemic::Pixels::PixelStatus status)
     {
         using Systemic::Pixels::PixelStatus;
@@ -226,6 +290,8 @@ bool TrayApp::initialize(HINSTANCE instanceHandle, const std::wstring& configPat
     const std::wstring folder = (slash == std::wstring::npos) ? L"." : configPath_.substr(0, slash);
     settingsPath_ = folder + L"\\pixels.ini";
     logFilePath_ = folder + L"\\pixels_log.txt";
+    // Mod INI lives one level above the PixelsDiceTray folder
+    const std::wstring modIniPath = folder + L"\\..\\smart-dice-rolls-mod.ini";
 
     // Create default INI if missing and load settings
     TraySettings::createDefaultIfMissing(settingsPath_);
@@ -291,7 +357,7 @@ bool TrayApp::initialize(HINSTANCE instanceHandle, const std::wstring& configPat
         MessageBoxW(windowHandle_, L"Failed to start runtime service.", L"Pixels Tray", MB_ICONERROR | MB_OK);
     }
 
-    // Start the roll server with snapshot and reconnect-suspend callbacks
+    // Start the roll server with snapshot, reconnect-suspend, and click callbacks
     rollServer_->start(
         [this]() -> std::vector<DieStatusSnapshot>
         {
@@ -300,6 +366,27 @@ bool TrayApp::initialize(HINSTANCE instanceHandle, const std::wstring& configPat
         [this](std::chrono::seconds duration)
         {
             if (runtime_) runtime_->suspendReconnects(duration);
+        },
+        [this, modIniPath](const std::string& mode)
+        {
+            // Read display config from the mod INI (same file the mod DLL reads)
+            char iniPathA[MAX_PATH];
+            WideCharToMultiByte(CP_ACP, 0, modIniPath.c_str(), -1,
+                iniPathA, MAX_PATH, nullptr, nullptr);
+
+            char buf[64];
+            float normX = 0.50f;
+            float normY = 0.43f;
+            GetPrivateProfileStringA("display", "click_norm_x", "0.50",
+                buf, sizeof(buf), iniPathA);
+            try { normX = std::stof(buf); } catch (...) {}
+            GetPrivateProfileStringA("display", "click_norm_y", "0.43",
+                buf, sizeof(buf), iniPathA);
+            try { normY = std::stof(buf); } catch (...) {}
+
+            appendLog("[TrayApp] Clicking dice button (mode=" + mode +
+                " normX=" + std::to_string(normX) + " normY=" + std::to_string(normY) + ")");
+            clickBG3DiceButton(mode, normX, normY);
         }
     );
 
